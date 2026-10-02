@@ -1,4 +1,63 @@
-# pylabview
+# labview-vi-reader
+
+Read NI LabVIEW `.vi` / `.ctl` files without LabVIEW, including files saved by
+**LabVIEW 2026**. Also packaged as a [Claude](https://claude.com/claude-code) skill, so
+Claude can open a VI and explain what it does.
+
+This is a fork of [mefistotelis/pylabview](https://github.com/mefistotelis/pylabview)
+(MIT) with:
+
+* **LabVIEW 2017-2026 file support**, verified on VIs shipped with LabVIEW 2026 Q3
+  (extract to XML, rebuild, compare every block): LV2026 `VITS` size prefix, LVOOP link
+  cache class lists (LV2017+) and class hierarchy (LV2020+), `TCPI` links, Set/Map type
+  descriptors, nested variant data, `STRG` padding, and several XML round-trip fixes.
+* **`vi_summary.py`** - turns one VI into a short Markdown digest: version, description,
+  front panel controls, block diagram tree with every wire (source -> sinks), case
+  selector values, constants, comments, named subVI calls and terminals, built-in
+  function names (from a table built off LabVIEW's palette files), and dependencies.
+
+## Use as a Claude skill
+
+```bash
+git clone https://github.com/junior941230/labview-vi-reader ~/.claude/skills/labview-vi-reader
+```
+
+Then ask Claude about a VI ("what does `C:\proj\Main.vi` do?"). Only Python 3.8+ is
+needed; Pillow is optional (used just for icon images). See [SKILL.md](SKILL.md).
+
+## Use directly
+
+```bash
+python vi_summary.py "My VI.vi"                 # Markdown digest to stdout
+python vi_summary.py "My VI.vi" --keep out_dir  # also keep the full XML extraction
+python -m pylabview.readRSRC -x -i "My VI.vi" -m out/MyVI.xml   # raw pylabview
+```
+
+Example output (LabVIEW 2026 example `Sample Main.vi`):
+
+```
+## Block diagram
+- While Loop#53
+    - Wait (ms) [prim 1302]#43
+    - Random Number (0-1) [prim 1070]#85
+      wire: Random Number (0-1) [prim 1070]#85[t0] -> FP "Waveform Chart"
+      wire: const 10 (0x0000000A) "milliseconds to wait" -> Wait (ms) [prim 1302]#43[t1]
+      wire: FP "Stop" -> term#73[t1]
+```
+
+Not decoded (kept as raw binary; XML round-trip is still exact): `VICD` compiled code,
+`EiVr`/`HpEr`/`HpVr`/`SCVI`/`GUGV` link objects, fixed-point min/max values.
+Property/invoke node property names and built-in function terminal names are not shown.
+
+Development:
+
+* Regression test: `python tests/corpus_lv2026.py [count] [seed] [labview_dir]`
+* Rebuild the function name table for another LabVIEW version:
+  `python tools/build_prim_table.py "<LabVIEW dir>" prim_names.json`
+
+---
+
+# pylabview (upstream README)
 
 Tools for extracting, changing, and re-creating LabVIEV RSRC files, like VIs or CTLs.
 
@@ -41,29 +100,6 @@ The first tool to use is `readRSRC.py` and extract the RSRC file into a form
 which is easier to understand and modify.
 
 # Supported versions
-
-## LabVIEW 2026 (this fork)
-
-This copy adds support for files saved by LabVIEW 2017 to 2026, verified on VIs
-shipped with LabVIEW 2026 Q3 (extract to XML, rebuild, compare every block):
-
-* `VITS`: LV2026 size prefix before each tag variant
-* `LIvi`/`LIfp`/`LIbd`: LVOOP link cache class list (LV2017+) and class hierarchy
-  list (LV2020+), new `TCPI` link object (LV2026)
-* `VCTP`: Set (0x73) and Map (0x74) type descriptors
-* nested variants inside variant data, `STRG` padding, several XML round-trip bugs
-
-Not decoded (kept as raw binary, round-trip still exact): `VICD` compiled code,
-`EiVr`/`HpEr`/`HpVr`/`SCVI`/`GUGV` link objects, fixed-point min/max values.
-
-Quick use:
-
-    pip install pillow
-    python -m pylabview.readRSRC -x -i "My VI.vi" -m out/MyVI.xml
-
-Regression test: `python tests/corpus_lv2026.py [count] [seed] [labview_dir]`.
-
-## Upstream notes
 
 The tools were tested on all standard VIs from LabVIEW 2014 and LabVIEW 6.0.
 These standard VIs included a variety of versions, ie LV14 contains some VIs
