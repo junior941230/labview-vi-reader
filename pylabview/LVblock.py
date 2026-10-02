@@ -18,7 +18,10 @@ import io
 import os
 import zlib
 
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:  # optional: without Pillow, image blocks are kept as raw binary
+    Image = None
 from hashlib import md5
 from types import SimpleNamespace
 from ctypes import c_ubyte, c_uint32, c_int32, sizeof
@@ -4195,7 +4198,7 @@ class ICON(RawImageBlock):
         section.padding_w = 1
         return section
 
-    def parseRSRCData(self, section_num, bldata):
+    def parseRSRCSectionData(self, section_num, bldata):
         section = self.sections[section_num]
 
         icon = self.parseRSRCRawImage(section.width, section.height, section.bpp, section.padding_w, bldata)
@@ -4203,6 +4206,8 @@ class ICON(RawImageBlock):
 
     def updateSectionData(self, section_num=None):
         section = self.getSection(section_num)
+        if section.image is None:  # stored raw (e.g. no Pillow); keep data as loaded
+            return
 
         data_buf = self.prepareRawImage(section.width, section.height, section.bpp, section.padding_w, section.image)
 
