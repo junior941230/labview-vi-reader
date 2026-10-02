@@ -17,6 +17,17 @@ STRUCTS = {
     'seq': 'Stacked Sequence', 'flatSequence': 'Flat Sequence', 'eventStruct': 'Event Structure',
     'timedLoop': 'Timed Loop', 'inPlaceElemStruct': 'In Place Element', 'diagDisable': 'Diagram Disable',
     'condDisable': 'Conditional Disable', 'typeSelect': 'Type Specialization', 'formula': 'Formula Node',
+    'decomposeRecomposeStructure': 'In Place Element',
+}
+# Built-in nodes stored with their own class (not as prim); class name is kept next to it
+NODES = {
+    'aBuild': 'Build Array', 'aIndx': 'Index Array', 'aInit': 'Initialize Array', 'aReplace': 'Replace Array Subset',
+    'aInsert': 'Insert Into Array', 'subset': 'Array/String Subset', 'decimate': 'Decimate 1D Array',
+    'concat': 'Concatenate Strings', 'printf': 'Format Into String', 'scanf': 'Scan From String',
+    'mux': 'Bundle', 'demux': 'Unbundle', 'nMux': 'Bundle/Unbundle By Name', 'mergeErrors': 'Merge Errors',
+    'cpdArith': 'Compound Arithmetic', 'propNode': 'Property Node', 'invokeNode': 'Invoke Node',
+    'extFunc': 'Call Library Function', 'xNode': 'XNode', 'hiddenFBNode': 'Feedback Node',
+    'slaveFBInputNode': 'Feedback Node init', 'sharedVariable': 'Shared Variable', 'eventDataNode': 'Event Data Node',
 }
 CALLS = {'iUse', 'polyIUse', 'dynIUse', 'callParentDynIUse', 'xIUse', 'callByRef', 'overridableParentIUse',
          'dynLink', 'staticVIRef'}
@@ -111,6 +122,17 @@ def summarize(vi, keep=None):
             td = td.find('./TypeDesc')
         return td
 
+    # Link objects point at heap objects by uid (LinkOffsetList / APILinkCacheList)
+    def links(blk):
+        out = {}
+        for obj in root.iterfind('.//{}/Section/*/*'.format(blk)):
+            path = [s.text or '' for s in obj.iterfind('./LinkSavePathRef/String')]
+            name = re.sub(r'&#x[0-9A-Fa-f]+;', '', path[-1]) if path else ''
+            for o in obj.iterfind('./*/Offset'):
+                out.setdefault(str(int(o.text, 0)), name)
+        return out
+    fp_links, bd_links = links('LIfp'), links('LIbd')
+
     # Front panel
     fp = first(heap(base + '_FPHb.xml'), heap(base + '_FPHc.xml'))
     fp_names = {}
@@ -122,6 +144,9 @@ def summarize(vi, keep=None):
             ddo = d.find('ddo')
             kind = DDO.get(ddo.get('class'), ddo.get('class')) if ddo is not None else '?'
             name = own_label(ddo) if ddo is not None else ''
+            src = fp_links.get(d.get('uid')) or (fp_links.get(ddo.get('uid')) if ddo is not None else None)
+            if src:
+                kind += ', ' + src
             fp_names[d.get('uid')] = name or kind
             w('- "{}" ({})'.format(name, kind))
 
@@ -142,8 +167,11 @@ def summarize(vi, keep=None):
             if cls == 'prim':
                 return 'prim(resID {})#{}'.format(el.findtext('primResID'), uid)
             if cls in CALLS:
-                return 'subVI call ({}){}#{}'.format(cls, ' "' + lab + '"' if lab else '', uid)
-            return '{}{}#{}'.format(cls, ' "' + lab + '"' if lab else '', uid)
+                target = bd_links.get(uid) or lab
+                return 'subVI call ({}){}#{}'.format(cls, ' "' + target + '"' if target else '', uid)
+            name = '{} [{}]'.format(NODES[cls], cls) if cls in NODES else cls
+            target = bd_links.get(uid) or lab
+            return '{}{}#{}'.format(name, ' "' + target + '"' if target else '', uid)
 
         # terminals -> owning node
         for t in bd.iter('SL__arrayElement'):
@@ -229,6 +257,9 @@ def summarize(vi, keep=None):
                 i = int(r.findtext('diagramIdx'))
                 if 0 <= i < nframes:
                     out[i].append(s)
+            if kind == 'Cluster' and {v for x in out for v in x} <= {'Error 0', 'Error 1'}:
+                # plain No Error/Error case: 0/1 is the status, not an error code
+                out = [[{'Error 0': 'No Error', 'Error 1': 'Error'}[v] for v in x] for x in out]
             dflt = sel.findtext('SelectDefaultCase')
             if dflt and re.fullmatch(r'[0-9A-Fa-f]+', dflt) and int(dflt, 16) < nframes:
                 out[int(dflt, 16)].append('Default')
