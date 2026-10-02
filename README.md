@@ -42,6 +42,29 @@ which is easier to understand and modify.
 
 # Supported versions
 
+## LabVIEW 2026 (this fork)
+
+This copy adds support for files saved by LabVIEW 2017 to 2026, verified on VIs
+shipped with LabVIEW 2026 Q3 (extract to XML, rebuild, compare every block):
+
+* `VITS`: LV2026 size prefix before each tag variant
+* `LIvi`/`LIfp`/`LIbd`: LVOOP link cache class list (LV2017+) and class hierarchy
+  list (LV2020+), new `TCPI` link object (LV2026)
+* `VCTP`: Set (0x73) and Map (0x74) type descriptors
+* nested variants inside variant data, `STRG` padding, several XML round-trip bugs
+
+Not decoded (kept as raw binary, round-trip still exact): `VICD` compiled code,
+`EiVr`/`HpEr`/`HpVr`/`SCVI`/`GUGV` link objects, fixed-point min/max values.
+
+Quick use:
+
+    pip install pillow
+    python -m pylabview.readRSRC -x -i "My VI.vi" -m out/MyVI.xml
+
+Regression test: `python tests/corpus_lv2026.py [count] [seed] [labview_dir]`.
+
+## Upstream notes
+
 The tools were tested on all standard VIs from LabVIEW 2014 and LabVIEW 6.0.
 These standard VIs included a variety of versions, ie LV14 contains some VIs
 created in previous versions down to LabVIEW 8.6.
