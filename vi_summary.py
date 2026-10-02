@@ -7,10 +7,16 @@ constants, comments and dependencies.
 Usage: python vi_summary.py <file.vi> [--keep DIR]
   --keep DIR   keep the full pylabview XML extraction in DIR for deeper digging
 """
-import os, re, subprocess, sys, tempfile
+import json, os, re, subprocess, sys, tempfile
 import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# primResID -> function name, built from LabVIEW palette files by tools/build_prim_table.py
+try:
+    with open(os.path.join(HERE, 'prim_names.json'), encoding='utf-8') as _fh:
+        PRIMS = json.load(_fh)
+except OSError:
+    PRIMS = {}
 
 STRUCTS = {
     'whileLoop': 'While Loop', 'forLoop': 'For Loop', 'select': 'Case Structure',
@@ -165,7 +171,10 @@ def summarize(vi, keep=None):
             if cls in STRUCTS:
                 return '{}#{}'.format(STRUCTS[cls], uid)
             if cls == 'prim':
-                return 'prim(resID {})#{}'.format(el.findtext('primResID'), uid)
+                rid = el.findtext('primResID')
+                if rid in PRIMS:
+                    return '{} [prim {}]#{}'.format(PRIMS[rid], rid, uid)
+                return 'prim(resID {})#{}'.format(rid, uid)
             if cls in CALLS:
                 target = bd_links.get(uid) or lab
                 return 'subVI call ({}){}#{}'.format(cls, ' "' + target + '"' if target else '', uid)
@@ -303,7 +312,7 @@ def summarize(vi, keep=None):
         w('\n## Parser notes')
         for x in warn:
             w('- ' + x)
-    w('\n(prim resIDs are LabVIEW internal function IDs; names are not stored in the file. '
+    w('\n(prim(resID N) = built-in function missing from the name table; infer it from context. '
       'Full XML: {})'.format(out if keep else 'rerun with --keep DIR'))
     return '\n'.join(L)
 
