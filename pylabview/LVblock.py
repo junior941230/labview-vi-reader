@@ -6918,6 +6918,7 @@ class VITS(CompleteBlock):
         ver = self.vi.getFileVersion()
         section.content = []
         section.endianness = 'big'
+        section.sizePrefixed = False
 
         # Get count of tags; endianness was wrong in some versions
         if isGreaterOrEqVersion(ver, 6,1,0,4):  # noqa: E231
@@ -6942,12 +6943,23 @@ class VITS(CompleteBlock):
             if isSmallerVersion(ver, 6,5,0,2):  # noqa: E231
                 bldata.read(4)
             obj_pos = bldata.tell()
+            # LV2026: each variant is preceded by u32 size (excluding itself); a variant
+            # version would be >= 0x04000000, so a small value identifies the size field
+            obj_size = int.from_bytes(bldata.read(4), byteorder='big', signed=False)
+            if obj_size < 0x01000000:
+                section.sizePrefixed = True
+                obj_pos += 4
+            else:
+                obj_size = None
+                bldata.seek(obj_pos)
             val.obj = LVdatafill.newDataFillObject(self.vi, blockref, LVdatatype.TD_FULL_TYPE.LVVariant, None, self.po)
             val.obj.useConsolidatedTypes = False
             if val.name in (b'nirviModGen',):
                 # The content of this type is RSRC file - store it accordingly
                 val.obj.expectContentKind = "RSRC"
             val.obj.initWithRSRC(bldata)
+            if obj_size is not None:
+                bldata.seek(obj_pos + obj_size)
             self.appendPrintMapEntry(section, bldata.tell(), bldata.tell()-obj_pos, 1,
                                      "TagObject[{}].Content".format(len(section.content)))
             section.content.append(val)
@@ -6963,7 +6975,10 @@ class VITS(CompleteBlock):
             data_buf += LV.prepareLStr(val.name, 1, self.po)
             if isSmallerVersion(ver, 6,5,0,2):  # noqa: E231
                 data_buf += (b'\0' * 4)
-            data_buf += val.obj.prepareRSRCData()
+            obj_buf = val.obj.prepareRSRCData()
+            if getattr(section, 'sizePrefixed', False):
+                data_buf += len(obj_buf).to_bytes(4, byteorder="big", signed=False)
+            data_buf += obj_buf
         return data_buf
 
     def expectedRSRCSize(self, section_num):
@@ -6978,6 +6993,7 @@ class VITS(CompleteBlock):
         endianness = section_elem.get("Endianness")
         if endianness in ('little', 'big',):
             section.endianness = endianness
+        section.sizePrefixed = section_elem.get("SizePrefixed") == "1"
         for subelem in section_elem:
             if (subelem.tag == "NameObject"):
                 continue  # Items parsed somewhere else
@@ -7005,6 +7021,8 @@ class VITS(CompleteBlock):
     def exportXMLSectionData(self, section_elem, section_num, section, fname_base):
         if section.endianness != 'big':
             section_elem.set("Endianness", section.endianness)
+        if getattr(section, 'sizePrefixed', False):
+            section_elem.set("SizePrefixed", "1")
         for i, val in enumerate(section.content):
             subelem = ET.SubElement(section_elem, "Object")
             subelem.set("Name", val.name.decode(self.vi.textEncoding))
