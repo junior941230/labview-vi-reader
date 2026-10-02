@@ -588,8 +588,41 @@ class LinkObjBase:
         self.apiLinkBool2 = 1
         self.apiLinkCallParentNodes = 0
         self.apiLinkContent = b''
-        self.apiLinkInterfaces = []
-        self.apiLinkTail = b''
+        # LV2017+: class list, items are [QualifiedName, PathRef, u8 flag]
+        # LV2020+: class hierarchy list, items are [QualifiedName, PathRef, [[QualifiedName, PathRef] of parents]]
+        self.apiLinkClassLists = [[], []]
+        self.apiLinkMidByte = 0
+
+    def parseUDClassAPILinkClassList(self, bldata, hierarchy):
+        count = int.from_bytes(bldata.read(4), byteorder='big', signed=False)
+        if count > self.po.typedesc_list_limit:
+            raise AttributeError("{:s} {} class list length {:d} exceeds limit"
+                                 .format(type(self).__name__, self.ident, count))
+        items = []
+        for i in range(count):
+            qualName = readQualifiedName(bldata, self.po)
+            pathRef = self.parsePathRef(bldata)
+            if hierarchy:
+                extra = [[readQualifiedName(bldata, self.po), self.parsePathRef(bldata)]
+                         for j in range(int.from_bytes(bldata.read(4), byteorder='big', signed=False))]
+            else:
+                extra = int.from_bytes(bldata.read(1), byteorder='big', signed=False)
+            items.append([qualName, pathRef, extra])
+        return items
+
+    def prepareUDClassAPILinkClassList(self, items, hierarchy):
+        data_buf = len(items).to_bytes(4, byteorder='big', signed=False)
+        for qualName, pathRef, extra in items:
+            data_buf += prepareQualifiedName(qualName, self.po)
+            data_buf += pathRef.prepareRSRCData()
+            if hierarchy:
+                data_buf += len(extra).to_bytes(4, byteorder='big', signed=False)
+                for parentName, parentPath in extra:
+                    data_buf += prepareQualifiedName(parentName, self.po)
+                    data_buf += parentPath.prepareRSRCData()
+            else:
+                data_buf += int(extra).to_bytes(1, byteorder='big', signed=False)
+        return data_buf
 
     def parseUDClassAPILinkCache(self, bldata):
         ver = self.vi.getFileVersion()
@@ -624,22 +657,14 @@ class LinkObjBase:
         self.apiLinkContent = readLStr(bldata, 1, self.po)
         self.appendPrintMapEntry(bldata.tell(), 4+len(self.apiLinkContent), 1, "UDClassAPILinkCache.Content")
 
-        if isGreaterOrEqVersion(ver, 20,0,0,0):
-            # LV2020+: list of (QualifiedName, PathRef, u8 flag), likely the class interfaces
-            count = int.from_bytes(bldata.read(4), byteorder='big', signed=False)
-            if count > self.po.typedesc_list_limit:
-                raise AttributeError("{:s} {} interface list length {:d} exceeds limit"
-                                     .format(type(self).__name__, self.ident, count))
-            for i in range(count):
-                qualName = readQualifiedName(bldata, self.po)
-                pathRef = self.parsePathRef(bldata)
-                flag = int.from_bytes(bldata.read(1), byteorder='big', signed=False)
-                self.apiLinkInterfaces.append((qualName, pathRef, flag,))
-            self.appendPrintMapEntry(bldata.tell(), 4, 1, "UDClassAPILinkCache.Interfaces")
         if isGreaterOrEqVersion(ver, 17,0,0,0):
-            # LV2017+: 5 bytes, meaning unknown
-            self.apiLinkTail = bldata.read(5)
-            self.appendPrintMapEntry(bldata.tell(), 5, 1, "UDClassAPILinkCache.Tail")
+            # LV2017+: class list, u8; LV2020+ (not in LV2019, present in LV2021): second class list
+            start_pos = bldata.tell()
+            self.apiLinkClassLists[0] = self.parseUDClassAPILinkClassList(bldata, False)
+            self.apiLinkMidByte = int.from_bytes(bldata.read(1), byteorder='big', signed=False)
+            if isGreaterOrEqVersion(ver, 20,0,0,0):
+                self.apiLinkClassLists[1] = self.parseUDClassAPILinkClassList(bldata, True)
+            self.appendPrintMapEntry(bldata.tell(), bldata.tell()-start_pos, 1, "UDClassAPILinkCache.ClassLists")
 
     def prepareUDClassAPILinkCache(self, start_offs):
         ver = self.vi.getFileVersion()
@@ -666,14 +691,11 @@ class LinkObjBase:
 
         data_buf += prepareLStr(self.apiLinkContent, 1, self.po)
 
-        if isGreaterOrEqVersion(ver, 20,0,0,0):
-            data_buf += len(self.apiLinkInterfaces).to_bytes(4, byteorder='big', signed=False)
-            for qualName, pathRef, flag in self.apiLinkInterfaces:
-                data_buf += prepareQualifiedName(qualName, self.po)
-                data_buf += pathRef.prepareRSRCData()
-                data_buf += int(flag).to_bytes(1, byteorder='big', signed=False)
         if isGreaterOrEqVersion(ver, 17,0,0,0):
-            data_buf += self.apiLinkTail.ljust(5, b'\0')[:5]
+            data_buf += self.prepareUDClassAPILinkClassList(self.apiLinkClassLists[0], False)
+            data_buf += int(self.apiLinkMidByte).to_bytes(1, byteorder='big', signed=False)
+            if isGreaterOrEqVersion(ver, 20,0,0,0):
+                data_buf += self.prepareUDClassAPILinkClassList(self.apiLinkClassLists[1], True)
         return data_buf
 
     def initWithXMLUDClassAPILinkCache(self, lnkobj_elem):
@@ -683,18 +705,26 @@ class LinkObjBase:
         self.apiLinkIsInternal = int(lnkobj_elem.get("APILinkIsInternal"), 0)
         self.apiLinkBool2 = int(lnkobj_elem.get("APILinkBool2"), 0)
         self.apiLinkCallParentNodes = int(lnkobj_elem.get("APILinkCallParentNodes"), 0)
-        self.apiLinkTail = bytes.fromhex(lnkobj_elem.get("APILinkTail", ""))
+        self.apiLinkMidByte = int(lnkobj_elem.get("APILinkMidByte", "0"), 0)
 
         for subelem in lnkobj_elem:
-            if (subelem.tag == "APILinkInterface"):
+            if (subelem.tag in ("APILinkClass", "APILinkClassHierarchy",)):
                 qualName = []
                 pathRef = None
+                parents = []
                 for item in subelem:
                     if item.tag == "LinkSaveQualName":
                         self.initWithXMLQualifiedName(qualName, item)
                     elif item.tag == "LinkSavePathRef":
                         pathRef = self.initWithXMLPathRef(item)
-                self.apiLinkInterfaces.append((qualName, pathRef, int(subelem.get("Flag", "0"), 0),))
+                    elif item.tag == "Parent":
+                        parentName = []
+                        self.initWithXMLQualifiedName(parentName, item.find("LinkSaveQualName"))
+                        parents.append([parentName, self.initWithXMLPathRef(item.find("LinkSavePathRef"))])
+                if subelem.tag == "APILinkClass":
+                    self.apiLinkClassLists[0].append([qualName, pathRef, int(subelem.get("Flag", "0"), 0)])
+                else:
+                    self.apiLinkClassLists[1].append([qualName, pathRef, parents])
             elif (subelem.tag == "APILinkContent"):
                 if subelem.text is not None:
                     elem_text = ET.unescape_safe_store_element_text(subelem.text)
@@ -710,13 +740,21 @@ class LinkObjBase:
         lnkobj_elem.set("APILinkIsInternal", "{:d}".format(self.apiLinkIsInternal))
         lnkobj_elem.set("APILinkBool2", "{:d}".format(self.apiLinkBool2))
         lnkobj_elem.set("APILinkCallParentNodes", "{:d}".format(self.apiLinkCallParentNodes))
-        if self.apiLinkTail:
-            lnkobj_elem.set("APILinkTail", self.apiLinkTail.hex())
-        for qualName, pathRef, flag in self.apiLinkInterfaces:
-            subelem = ET.SubElement(lnkobj_elem, "APILinkInterface")
+        if self.apiLinkMidByte != 0:
+            lnkobj_elem.set("APILinkMidByte", "{:d}".format(self.apiLinkMidByte))
+        for qualName, pathRef, flag in self.apiLinkClassLists[0]:
+            subelem = ET.SubElement(lnkobj_elem, "APILinkClass")
             subelem.set("Flag", "{:d}".format(flag))
             self.exportXMLQualifiedName(qualName, ET.SubElement(subelem, "LinkSaveQualName"))
             pathRef.exportXML(ET.SubElement(subelem, "LinkSavePathRef"), fname_base)
+        for qualName, pathRef, parents in self.apiLinkClassLists[1]:
+            subelem = ET.SubElement(lnkobj_elem, "APILinkClassHierarchy")
+            self.exportXMLQualifiedName(qualName, ET.SubElement(subelem, "LinkSaveQualName"))
+            pathRef.exportXML(ET.SubElement(subelem, "LinkSavePathRef"), fname_base)
+            for parentName, parentPath in parents:
+                parent_elem = ET.SubElement(subelem, "Parent")
+                self.exportXMLQualifiedName(parentName, ET.SubElement(parent_elem, "LinkSaveQualName"))
+                parentPath.exportXML(ET.SubElement(parent_elem, "LinkSavePathRef"), fname_base)
 
         subelem = ET.SubElement(lnkobj_elem,"APILinkContent")
         name_text = self.apiLinkContent.decode(self.vi.textEncoding)
@@ -789,7 +827,7 @@ class LinkObjBase:
         self.initWithXMLUDClassAPILinkCache(lnkobj_elem)
 
         for subelem in lnkobj_elem:
-            if subelem.tag in ("LinkSaveQualName","LinkSavePathRef","APILinkContent","APILinkInterface",):
+            if subelem.tag in ("LinkSaveQualName","LinkSavePathRef","APILinkContent","APILinkClass","APILinkClassHierarchy",):
                 pass # These tags are parsed elswhere
             elif (subelem.tag == "APILinkCacheList"):
                 self.apiLinkCacheList = self.initWithXMLLinkOffsetList(subelem)
@@ -836,7 +874,7 @@ class LinkObjBase:
         self.initWithXMLUDClassAPILinkCache(lnkobj_elem)
 
         for subelem in lnkobj_elem:
-            if subelem.tag in ("LinkSaveQualName","LinkSavePathRef","APILinkContent","APILinkInterface",):
+            if subelem.tag in ("LinkSaveQualName","LinkSavePathRef","APILinkContent","APILinkClass","APILinkClassHierarchy",):
                 pass # These tags are parsed elswhere
             else:
                 raise AttributeError("UDClassVIAPISaveInfo contains unexpected tag '{}'".format(subelem.tag))
@@ -4336,7 +4374,7 @@ def newLinkObject(vi, blockref, list_ident, ident, po):
         ctor = LinkObjUDClassDDOToUDClassAPILink
     elif ident in (b'DDPI',):
         ctor = LinkObjDDODefaultDataToUDClassAPILink
-    elif ident in (b'VRPI',):
+    elif ident in (b'VRPI', b'TCPI',): # TCPI seen in LV2026, same layout as VRPI
         ctor = LinkObjHeapObjToUDClassAPILink
     elif ident in (b'VIPI',):
         ctor = LinkObjVIToUDClassAPILink

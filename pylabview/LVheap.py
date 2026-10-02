@@ -2107,6 +2107,12 @@ class HeapNodeTDDataFill(HeapNode):
             return
         ret = False
         tdType = self.td.fullType()
+        from pylabview.LVdatatype import TD_FULL_TYPE
+        if tdType in (TD_FULL_TYPE.FixedPoint, TD_FULL_TYPE.ComplexFixedPt,):
+            # Fixed-point value decoding not implemented; keep raw bytes
+            self.value = None
+            self.format = "hex"
+            return
         # We have two types of content, depending on TD type: text value directly in current tag, or in children
         if isinstance(self.content, (bytes, bytearray,)):
             bldata = BytesIO(self.content)

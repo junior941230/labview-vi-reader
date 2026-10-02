@@ -814,6 +814,8 @@ class DataFillLVVariant(DataFill):
     def initWithRSRCParse(self, bldata):
         from pylabview.LVclasses import LVVariant, OleVariant
         ver = self.vi.getFileVersion()
+        if getattr(self.vi, 'variantNoConsolidated', False):
+            self.useConsolidatedTypes = False
         if isGreaterOrEqVersion(ver, 6,0,0,2):
             self.value = LVVariant(0, self.vi, self.blockref, self.po, allowFillValue=True,
               useConsolidatedTypes=self.useConsolidatedTypes, expectContentKind=self.expectContentKind)
@@ -832,6 +834,8 @@ class DataFillLVVariant(DataFill):
 
     def initWithXML(self, df_elem):
         from pylabview.LVclasses import LVVariant, OleVariant
+        if getattr(self.vi, 'variantNoConsolidated', False):
+            self.useConsolidatedTypes = False
         if df_elem.tag == LVVariant.__name__:
             self.value = LVVariant(0, self.vi, self.blockref, self.po, allowFillValue=True,
               useConsolidatedTypes=self.useConsolidatedTypes, expectContentKind=self.expectContentKind)
@@ -1814,7 +1818,7 @@ class DataFillTypeDef(DataFill):
                 self.value.append(sub_df)
                 sub_df.initWithRSRC(bldata)
             except Exception as e:
-                raise RuntimeError("Data type {}: {}".format(enumOrIntToName(client.nested.fullType()), str(e)))
+                raise RuntimeError("Data type {}: {}".format(enumOrIntToName(sub_td.fullType()), str(e)))
         pass
 
     def prepareRSRCData(self, avoid_recompute=False):

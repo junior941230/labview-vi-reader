@@ -376,7 +376,13 @@ class LVVariant(LVObject):
             df = LVdatafill.newDataFillObjectWithTD(self.vi, self.blockref,
                                                     -1, 0, td, self.po, expectContentKind=self.expectContentKind)
             self.datafill.append(df)
-            df.initWithRSRC(bldata)
+            # Nested variants inside non-consolidated fill are non-consolidated as well
+            prev = getattr(self.vi, 'variantNoConsolidated', False)
+            self.vi.variantNoConsolidated = not usesConsolidatedTD
+            try:
+                df.initWithRSRC(bldata)
+            finally:
+                self.vi.variantNoConsolidated = prev
             pass
         # Read attributes
         self.attrs += self.parseRSRCAttribs(bldata)
@@ -556,11 +562,18 @@ class LVVariant(LVObject):
                                       attrib.name, attrib.nested, attrib.value))
                     self.attrs.append(attrib)
             elif (subelem.tag == "DataFill"):
-                for df_elem in subelem:
-                    df = LVdatafill.newDataFillObjectWithTag(self.vi, self.blockref, df_elem.tag, self.po)
-                    self.datafill.append(df)
-                    df.expectContentKind = self.expectContentKind
-                    df.initWithXML(df_elem)
+                # Nested variants inside non-consolidated fill are non-consolidated as well
+                noCons = not self.useConsolidatedTypes or                   ("auto" not in self.version and isSmallerVersion(self.version, 8,6,0,1))  # noqa E231
+                prev = getattr(self.vi, 'variantNoConsolidated', False)
+                self.vi.variantNoConsolidated = noCons
+                try:
+                    for df_elem in subelem:
+                        df = LVdatafill.newDataFillObjectWithTag(self.vi, self.blockref, df_elem.tag, self.po)
+                        self.datafill.append(df)
+                        df.expectContentKind = self.expectContentKind
+                        df.initWithXML(df_elem)
+                finally:
+                    self.vi.variantNoConsolidated = prev
             else:
                 raise AttributeError("LVVariant subtree contains unexpected tag '{}'".format(subelem.tag))
         pass

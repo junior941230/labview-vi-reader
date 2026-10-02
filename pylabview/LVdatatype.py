@@ -106,6 +106,8 @@ class TD_FULL_TYPE(enum.IntEnum):
     AlignmntMarker = 0x65
 
     Refnum =		0x70
+    Set =			0x73 # LV2019+ Set, one client: element type
+    Map =			0x74 # LV2019+ Map, clients: key and value types
 
     Ptr =			0x80
     PtrTo =			0x83
@@ -2794,6 +2796,8 @@ class TDObjectFixedPoint(TDObject):
 class TDObjectSingleContainer(TDObjectContainer):
     """ Type Descriptor which is container for one child TD
     """
+    clientCount = 1
+
     def __init__(self, *args):
         super().__init__(*args)
 
@@ -2802,7 +2806,7 @@ class TDObjectSingleContainer(TDObjectContainer):
         self.otype, self.oflags, obj_len = TDObject.parseRSRCDataHeader(bldata)
 
         self.clients = []
-        for i in range(1):
+        for i in range(self.clientCount):
             clientTD, cli_len = self.parseRSRCIndexedTD(bldata)
             self.clients.append(clientTD)
 
@@ -2811,17 +2815,15 @@ class TDObjectSingleContainer(TDObjectContainer):
 
     def prepareRSRCData(self, avoid_recompute=False):
         data_buf = b''
-        for clientTD in self.clients:
+        for clientTD in self.clients[:self.clientCount]:
             data_buf += self.prepareRSRCIndexedTD(clientTD, avoid_recompute=avoid_recompute)
-            break # only one sub-type is supported
 
         return data_buf
 
     def expectedRSRCSize(self):
         exp_whole_len = 4
-        for clientTD in self.clients:
+        for clientTD in self.clients[:self.clientCount]:
             exp_whole_len += self.expectedRSRCClientTDSize(clientTD)
-            break # only one sub-type is valid
         exp_whole_len += self.expectedRSRCLabelSize()
         return exp_whole_len
 
@@ -2857,10 +2859,10 @@ class TDObjectSingleContainer(TDObjectContainer):
 
     def checkSanity(self):
         ret = super().checkSanity()
-        if (len(self.clients) != 1):
+        if (len(self.clients) != self.clientCount):
             if (self.po.verbose > 1):
                 eprint("{:s}: Warning: TypeDesc {:d} type 0x{:02x} clients count {:d}, expected exactly {:d}"\
-                  .format(self.vi.src_fname,self.index,self.otype,len(self.clients),1))
+                  .format(self.vi.src_fname,self.index,self.otype,len(self.clients),self.clientCount))
             ret = False
         return ret
 
@@ -3416,6 +3418,8 @@ def newTDObject(vi, blockref, idx, obj_flags, obj_type, po):
         TD_FULL_TYPE.AlignmntMarker: TDObjectSingleContainer,
         TD_FULL_TYPE.Ptr: TDObjectNumberPtr,
         TD_FULL_TYPE.PtrTo: TDObjectSingleContainer,
+        TD_FULL_TYPE.Set: TDObjectSingleContainer,
+        TD_FULL_TYPE.Map: TDObjectCluster, # same layout: count + key/value TDs
         TD_FULL_TYPE.Function: TDObjectFunction,
         TD_FULL_TYPE.TypeDef: TDObjectTypeDef,
         TD_FULL_TYPE.PolyVI: TDObjectPolyVI,
