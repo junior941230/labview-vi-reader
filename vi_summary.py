@@ -209,7 +209,15 @@ def summarize(vi, keep=None):
                 elif cls not in ('term', 'parm'):
                     desc += '.' + cls
                 pi = list(p.find('termList')).index(t)
-                term_owner[uid] = '{}[t{}]'.format(desc, pi)
+                # subVI terminal name = label of its type, which is the callee's connector control.
+                # Not used for prims/built-in nodes: their terminal types follow the wired data,
+                # so the label would be the upstream wire's, not the terminal's own name.
+                tname = None
+                if p.get('class') in CALLS:
+                    h = re.sub(r'\D', '', dco.findtext('typeDesc') or '')
+                    ttd = heap_type(int(h)) if h else None
+                    tname = ttd.get('Label') if ttd is not None else None
+                term_owner[uid] = '{}[{}]'.format(desc, tname or 't{}'.format(pi))
 
         # tunnels: a dco with its own termList joins outer and inner terminals
         for t in bd.iter('SL__arrayElement'):
