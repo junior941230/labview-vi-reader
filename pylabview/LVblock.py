@@ -2025,6 +2025,8 @@ class StringListBlock(SingleStringBlock):
         section = self.sections[section_num]
         section.content = []
         self.parseRSRCStringList(section, section_num, bldata)
+        # Some files (seen in STRG) have zero padding after the list
+        section.trailing = bldata.read()
 
     def prepareRSRCStringList(self, section, section_num):
         data_buf = b''
@@ -2043,6 +2045,7 @@ class StringListBlock(SingleStringBlock):
     def prepareRSRCData(self, section_num):
         section = self.sections[section_num]
         data_buf = self.prepareRSRCStringList(section, section_num)
+        data_buf += getattr(section, 'trailing', b'')
         return data_buf
 
     def expectedRSRCStringListSize(self, section, section_num):
@@ -2061,6 +2064,7 @@ class StringListBlock(SingleStringBlock):
     def expectedRSRCSize(self, section_num):
         section = self.getSection(section_num)
         exp_whole_len = self.expectedRSRCStringListSize(section, section_num)
+        exp_whole_len += len(getattr(section, 'trailing', b''))
         return exp_whole_len
 
     def initWithXMLStringList(self, section, strlist_elem):
@@ -2082,6 +2086,7 @@ class StringListBlock(SingleStringBlock):
 
     def initWithXMLSectionData(self, section, section_elem):
         section.content = []
+        section.trailing = bytes.fromhex(section_elem.get("Trailing", ""))
         self.initWithXMLStringList(section, section_elem)
 
     def exportXMLStringList(self, strlist_elem, section_num, section, fname_base):
@@ -2091,6 +2096,8 @@ class StringListBlock(SingleStringBlock):
         pass
 
     def exportXMLSectionData(self, section_elem, section_num, section, fname_base):
+        if getattr(section, 'trailing', b''):
+            section_elem.set("Trailing", section.trailing.hex())
         self.exportXMLStringList(section_elem, section_num, section, fname_base)
 
 

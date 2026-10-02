@@ -1625,7 +1625,10 @@ class HeapNode(object):
             propName = attributeIdToName(atId)
             elem.set(propName, attributeValueIntOrEnToStr(atId, atVal, self.parent))
 
-        tagText = self.prepareContentXML(fname_base)
+        if self.format == "hex": # must match how initWithXML() reads it back
+            tagText = HeapNode.prepareContentXML(self, fname_base)
+        else:
+            tagText = self.prepareContentXML(fname_base)
         ET.safe_store_element_text(elem, tagText)
 
         if scopeInfo == NODE_SCOPE.TagClose:
@@ -1711,6 +1714,10 @@ class HeapNodeStdInt(HeapNode):
         self.value = 0
 
     def parseRSRCContent(self):
+        if self.content is False and self.btlen < 0:
+            # Zero stored without content bytes; keep raw so it is re-created the same way
+            self.format = "hex"
+            return
         if not isinstance(self.content, (bytes, bytearray,)):
             raise AttributeError("Tag '{}' of Class '{}' has no byte-like content"\
               .format(self.tagEn.name, parentTopClassEn(self.parent).name))
