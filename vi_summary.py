@@ -97,6 +97,20 @@ def summarize(vi, keep=None):
     if desc is not None and (desc.text or '').strip():
         w('\n## Description\n' + desc.text.strip())
 
+    # Type lookup: heap TypeID -> consolidated (DTHP shift) -> flat VCTP entry (TopLevel)
+    vctp = root.find('.//VCTP/Section')
+    flat = vctp.findall('./TypeDesc') if vctp is not None else []
+    top_types = {int(t.get('Index')): int(t.get('FlatTypeID')) for t in vctp.iterfind('./TopLevel/TypeDesc')} if vctp is not None else {}
+    sl = root.find('.//DTHP/Section/TypeDescSlice')
+    shift = int(sl.get('IndexShift')) if sl is not None else 0
+
+    def heap_type(h):
+        f = top_types.get(h + shift - 1)
+        td = flat[f] if f is not None and f < len(flat) else None
+        while td is not None and td.get('Type') == 'TypeDef':  # unwrap typedef
+            td = td.find('./TypeDesc')
+        return td
+
     # Front panel
     fp = first(heap(base + '_FPHb.xml'), heap(base + '_FPHc.xml'))
     fp_names = {}
@@ -170,10 +184,56 @@ def summarize(vi, keep=None):
                 term_owner[x.get('uid')] = '{} {}#{}'.format(owner, dco.get('class'), dco.get('uid'))
 
         def walk(el, depth):
-            for dl in el.iterfind('./diagramList/SL__arrayElement'):
-                if len(el.findall('./diagramList/SL__arrayElement')) > 1:
-                    w('  ' * depth + '- (frame/case)')
+            frames = el.findall('./diagramList/SL__arrayElement')
+            labels = case_labels(el, len(frames)) if el.get('class') == 'select' else None
+            for i, dl in enumerate(frames):
+                if labels:
+                    w('  ' * depth + '- case ' + labels[i])
+                elif len(frames) > 1:
+                    w('  ' * depth + '- frame {}'.format(i))
                 walk_diag(dl, depth + 1)
+
+        def case_labels(sel, nframes):
+            """Selector values per case frame, from SelectRangeArray32 / SelectStringArray."""
+            td = None
+            cs = next((d for d in sel.iterfind('./termList/SL__arrayElement/dco') if d.get('class') == 'caseSel'), None)
+            if cs is not None and cs.findtext('typeDesc'):
+                td = heap_type(int(re.sub(r'\D', '', cs.findtext('typeDesc'))))
+            kind = td.get('Type', '') if td is not None else ''
+            enum = [e.text or '' for e in td.iterfind('EnumLabel')] if td is not None else []
+            strs = [bytes.fromhex(s.text or '').decode('latin1') for s in sel.iterfind('./SelectStringArray/SL__arrayElement')]
+
+            def val(v):
+                if strs:
+                    return '"{}"'.format(strs[v]) if 0 <= v < len(strs) else str(v)
+                if enum:
+                    return '"{}"'.format(enum[v]) if 0 <= v < len(enum) else str(v)
+                if kind == 'Boolean':
+                    return 'True' if v else 'False'
+                if kind == 'Cluster':  # error cluster: codes, with INT_MIN meaning "no error"
+                    return 'No Error' if v == -2**31 else 'Error {}'.format(v)
+                return str(v)
+
+            out = [[] for _ in range(nframes)]
+            for r in sel.iterfind('./SelectRangeArray32/SL__arrayElement'):
+                a, b = int(r.findtext('start')), int(r.findtext('end'))
+                ta, tb = r.findtext('startRangeType'), r.findtext('endRangeType')
+                if kind == 'Cluster' and a == b == -2**31:
+                    s = 'No Error'
+                elif a == b and ta == tb == '0':
+                    s = val(a)
+                elif kind == 'Cluster':
+                    s = 'Error {}..{}'.format('' if ta == '3' else a, '' if tb == '3' else b)
+                else:
+                    s = '{}..{}'.format('' if ta == '3' else val(a), '' if tb == '3' else val(b))
+                i = int(r.findtext('diagramIdx'))
+                if 0 <= i < nframes:
+                    out[i].append(s)
+            dflt = sel.findtext('SelectDefaultCase')
+            if dflt and re.fullmatch(r'[0-9A-Fa-f]+', dflt) and int(dflt, 16) < nframes:
+                out[int(dflt, 16)].append('Default')
+            # every non-default case has a value; SelectDefaultCase is omitted when it is 0
+            return [', '.join(x) or 'Default' for x in out]
 
         def walk_diag(diag, depth):
             for n in diag.iterfind('./zPlaneList/SL__arrayElement'):
