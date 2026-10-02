@@ -1,0 +1,7 @@
+*.pyc
+dist/
+*.lock
+build/
+pylabview.egg-info/
+test_out/
+examples/lv-std-libs-v1/
