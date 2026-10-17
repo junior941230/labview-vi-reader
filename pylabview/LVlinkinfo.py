@@ -3859,6 +3859,7 @@ class LinkObjXNodeToExtFuncLink(LinkObjBase):
     def __init__(self, *args):
         super().__init__(*args)
         self.clearExtFuncLinkSaveInfo()
+        self.xnodeFuncPath = b''
 
     def parseRSRCData(self, bldata):
         self.ident = bldata.read(4)
@@ -3867,20 +3868,28 @@ class LinkObjXNodeToExtFuncLink(LinkObjBase):
         self.parseExtFuncLinkSaveInfo(bldata)
         self.appendPrintMapEntry(bldata.tell(), bldata.tell()-start_pos, 1, \
           "{}.ExtFuncLinkSaveInfo".format(type(self).__name__))
-        # TODO I'm pretty sure some kind of string read is missing here..
+        # XNode plug-in path, e.g. "/PlugInImplementations/Read32/FunctionName";
+        # 4-byte length, no padding (seen in LV2021 FPGA Interface XNodes)
+        strlen = int.from_bytes(bldata.read(4), byteorder='big', signed=False)
+        self.xnodeFuncPath = bldata.read(strlen)
 
     def prepareRSRCData(self, start_offs=0, avoid_recompute=False):
         data_buf = b''
         data_buf += self.ident[:4]
         data_buf += self.prepareExtFuncLinkSaveInfo(start_offs+len(data_buf))
+        data_buf += len(self.xnodeFuncPath).to_bytes(4, byteorder='big', signed=False)
+        data_buf += self.xnodeFuncPath
         return data_buf
 
     def initWithXML(self, lnkobj_elem):
         self.ident = getRsrcTypeFromPrettyStr(lnkobj_elem.tag)
         self.initWithXMLExtFuncLinkSaveInfo(lnkobj_elem)
+        tmp = lnkobj_elem.get("XNodeFuncPath")
+        self.xnodeFuncPath = tmp.encode(self.vi.textEncoding) if tmp is not None else b''
 
     def exportXML(self, lnkobj_elem, fname_base):
         self.exportXMLExtFuncLinkSaveInfo(lnkobj_elem, fname_base)
+        lnkobj_elem.set("XNodeFuncPath", self.xnodeFuncPath.decode(self.vi.textEncoding))
 
 
 class LinkObjXNodeToVILink(LinkObjBase):
@@ -3889,6 +3898,7 @@ class LinkObjXNodeToVILink(LinkObjBase):
     def __init__(self, *args):
         super().__init__(*args)
         self.clearHeapToVILinkSaveInfo()
+        self.xnodeFuncPath = b''
 
     def parseRSRCData(self, bldata):
         self.ident = bldata.read(4)
@@ -3897,19 +3907,28 @@ class LinkObjXNodeToVILink(LinkObjBase):
         self.parseHeapToVILinkSaveInfo(bldata)
         self.appendPrintMapEntry(bldata.tell(), bldata.tell()-start_pos, 1, \
           "{}.HeapToVILinkSaveInfo".format(type(self).__name__))
+        # XNode item name, e.g. "NI.LV.FPGA.Error Cluster From Error Code";
+        # 4-byte length, no padding (same as in XNEF)
+        strlen = int.from_bytes(bldata.read(4), byteorder='big', signed=False)
+        self.xnodeFuncPath = bldata.read(strlen)
 
     def prepareRSRCData(self, start_offs=0, avoid_recompute=False):
         data_buf = b''
         data_buf += self.ident[:4]
         data_buf += self.prepareHeapToVILinkSaveInfo(start_offs+len(data_buf))
+        data_buf += len(self.xnodeFuncPath).to_bytes(4, byteorder='big', signed=False)
+        data_buf += self.xnodeFuncPath
         return data_buf
 
     def initWithXML(self, lnkobj_elem):
         self.ident = getRsrcTypeFromPrettyStr(lnkobj_elem.tag)
         self.initWithXMLHeapToVILinkSaveInfo(lnkobj_elem)
+        tmp = lnkobj_elem.get("XNodeFuncPath")
+        self.xnodeFuncPath = tmp.encode(self.vi.textEncoding) if tmp is not None else b''
 
     def exportXML(self, lnkobj_elem, fname_base):
         self.exportXMLHeapToVILinkSaveInfo(lnkobj_elem, fname_base)
+        lnkobj_elem.set("XNodeFuncPath", self.xnodeFuncPath.decode(self.vi.textEncoding))
 
 
 class LinkObjActiveXBDToTypeLib(LinkObjBase):

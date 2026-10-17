@@ -1103,10 +1103,11 @@ class RefnumCallback(RefnumBase_RCIOOMId):
         return exp_whole_len
 
 
-class RefnumUsrDefTagFlt(RefnumBase_RCIOOMId):
+class RefnumUsrDefTagFlt(RefnumUsrDefined):
     """ User Defined Tag Flatten Refnum Connector
 
-    Usage unknown.
+    Used by IMAQ Vision "Image" controls. Same layout as User Defined Refnum:
+    ident and type name strings (both "IMAQImage"), then LVVariant.
     """
     def __init__(self, *args):
         super().__init__(*args)
