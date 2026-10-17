@@ -1847,6 +1847,15 @@ class HeapNodeString(HeapNode):
     def __init__(self, *args):
         super().__init__(*args)
 
+    def parseRSRCContent(self):
+        super().parseRSRCContent()
+        # Not every string is text in the chosen code page (e.g. 0xFF bytes under cp950); keep those raw
+        if isinstance(self.content, (bytes, bytearray)):
+            try:
+                self.content.decode(self.vi.textEncoding)
+            except UnicodeDecodeError:
+                self.format = "hex"
+
     def prepareContentXML(self, fname_base):
 
         if self.content is None or isinstance(self.content, bool):
@@ -1891,6 +1900,11 @@ class HeapNodePStrList(HeapNode):
                 raise AttributeError("Tag '{}' of Class '{}' has truncated strings list in content"\
                   .format(self.tagEn.name, parentTopClassEn(self.parent).name))
         self.values = values
+        try:  # same as HeapNodeString: keep raw if not text in the chosen code page
+            for val in values:
+                val.decode(self.vi.textEncoding)
+        except UnicodeDecodeError:
+            self.format = "hex"
 
     def updateContent(self):
         content = b''
