@@ -67,6 +67,13 @@ fully and skim headers/dependencies of the rest before diving in.
   links. `<vilib>` = LabVIEW's vi.lib, `<userlib>` = user.lib.
 - **Parser notes** - blocks pylabview could not decode; their data is simply missing from
   the digest (see limitations).
+- **Express VI instance N (embedded code)** - Express VIs (Vision Assistant, DAQ Assistant,
+  ...) are called as `subVI call "Express VI instance N"`; their generated code is embedded
+  in the caller and summarized at the end under the same name (e.g. IMAQ ColorThreshold
+  with its ranges, Particle Analysis). 8-byte constants also show as two I32, since IMAQ
+  ranges are `{lower, upper}` clusters.
+- **Text encoding** - labels/strings are stored in the saving PC's code page. Big5 (Taiwan),
+  GBK and Shift-JIS are auto-detected; force one with `--textcp cp950` if text looks garbled.
 
 ### Gaps and how to cope
 

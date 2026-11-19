@@ -4,8 +4,10 @@ Extracts the file with pylabview (next to this script), then reports:
 version, description, front panel controls, block diagram nodes and wires,
 constants, comments and dependencies.
 
-Usage: python vi_summary.py <file.vi> [--keep DIR]
+Usage: python vi_summary.py <file.vi> [--keep DIR] [--textcp CP]
   --keep DIR   keep the full pylabview XML extraction in DIR for deeper digging
+  --textcp CP  code page of the VI's text (default: auto, detects Big5/GBK/Shift-JIS,
+               else mac_roman)
 """
 import json, os, re, subprocess, sys, tempfile
 import xml.etree.ElementTree as ET
@@ -21,10 +23,12 @@ except OSError:
 STRUCTS = {
     'whileLoop': 'While Loop', 'forLoop': 'For Loop', 'select': 'Case Structure',
     'seq': 'Stacked Sequence', 'flatSequence': 'Flat Sequence', 'eventStruct': 'Event Structure',
-    'timedLoop': 'Timed Loop', 'inPlaceElemStruct': 'In Place Element', 'diagDisable': 'Diagram Disable',
+    'timedLoop': 'Timed Loop', 'timeLoop': 'Timed Loop', 'inPlaceElemStruct': 'In Place Element',
+    'diagDisable': 'Diagram Disable', 'commentNode': 'Disable Structure',
     'condDisable': 'Conditional Disable', 'typeSelect': 'Type Specialization', 'formula': 'Formula Node',
     'decomposeRecomposeStructure': 'In Place Element',
 }
+TEXT_CP = 'latin1'  # code page for string constants / case strings, set by extract()
 # Built-in nodes stored with their own class (not as prim); class name is kept next to it
 NODES = {
     'aBuild': 'Build Array', 'aIndx': 'Index Array', 'aInit': 'Initialize Array', 'aReplace': 'Replace Array Subset',
@@ -45,14 +49,53 @@ DDO = {'stdNum': 'numeric', 'stdBool': 'boolean', 'stdString': 'string', 'stdPat
        'stdComboBox': 'combo box', 'stdLvClass': 'LV object', 'stdPict': 'picture'}
 
 
-def extract(vi, out):
+def extract(vi, out, textcp='auto'):
+    vi = os.path.abspath(vi)  # pylabview runs from HERE
     xml = os.path.join(out, 'vi.xml')
-    r = subprocess.run([sys.executable, '-W', 'ignore', '-m', 'pylabview.readRSRC', '-x', '-i', vi, '-m', xml],
+    r = subprocess.run([sys.executable, '-W', 'ignore', '-m', 'pylabview.readRSRC', '-x', '-i', vi, '-m', xml,
+                        '--textcp', 'mac_roman' if textcp == 'auto' else textcp],
                        cwd=HERE, capture_output=True, text=True, errors='replace')
     if r.returncode or not os.path.exists(xml):
         sys.exit('pylabview failed:\n' + r.stderr[-2000:])
+    if textcp == 'auto':
+        cp = guess_textcp(out)
+        if cp:
+            for fn in os.listdir(out):  # a block that fails under cp would otherwise leave a stale file
+                if os.path.isfile(os.path.join(out, fn)):
+                    os.remove(os.path.join(out, fn))
+            return extract(vi, out, cp)
+    global TEXT_CP
+    TEXT_CP = 'latin1' if textcp in ('auto', 'mac_roman') else textcp
     warn = [l.split(': ', 1)[-1] for l in r.stderr.splitlines() if 'Warning' in l or 'failed' in l]
     return xml, warn
+
+
+def guess_textcp(out):
+    """VIs store text in the saving system's ANSI code page, not marked in the file.
+    If the non-ASCII label bytes decode cleanly as Big5 / GBK / Shift-JIS, that's it."""
+    raw = set()
+    for fn in os.listdir(out):
+        if fn.endswith('.xml'):
+            for el in ET.parse(os.path.join(out, fn)).getroot().iter():
+                # only labels/comments; other strings may be binary blobs
+                for s in [el.text or '' if el.tag == 'text' else '', el.get('Label') or '']:
+                    if any(ord(c) > 127 for c in s) and '&#x' not in s:
+                        try:
+                            raw.add(s.encode('mac_roman'))
+                        except UnicodeEncodeError:
+                            pass
+    if not raw:
+        return None
+    def cjk(b, cp):
+        try:
+            return any(ord(c) > 0x2e7f for c in b.decode(cp))
+        except UnicodeDecodeError:
+            return False
+    for cp in ('cp950', 'gbk', 'cp932'):
+        # a stray non-text byte string shouldn't block detection, so 90% is enough
+        if sum(cjk(b, cp) for b in raw) >= 0.9 * len(raw):
+            return cp
+    return None
 
 
 def text_of(el):
@@ -81,9 +124,13 @@ def const_value(dco):
     if b is None:
         return v[:60]
     if len(b) >= 4 and int.from_bytes(b[:4], 'big') == len(b) - 4:  # string-like: u32 length + bytes
-        s = b[4:].decode('latin1')
+        s = b[4:].decode(TEXT_CP, errors='replace')
         if s.isprintable():
             return repr(s)
+    if len(b) == 8:  # often a cluster of two I32 (e.g. IMAQ ranges {lower, upper})
+        return '{} (0x{}; as 2x I32: {}, {})'.format(int.from_bytes(b, 'big', signed=True), v,
+                                                     int.from_bytes(b[:4], 'big', signed=True),
+                                                     int.from_bytes(b[4:], 'big', signed=True))
     if len(b) <= 8:
         return '{} (0x{})'.format(int.from_bytes(b, 'big', signed=True), v)
     return '0x' + v[:64] + ('...' if len(v) > 64 else '')
@@ -97,10 +144,10 @@ def first(*xs):
     return next((x for x in xs if x is not None), None)
 
 
-def summarize(vi, keep=None):
+def summarize(vi, keep=None, textcp='auto'):
     out = keep or tempfile.mkdtemp(prefix='visum_')
     os.makedirs(out, exist_ok=True)
-    xml, warn = extract(vi, out)
+    xml, warn = extract(vi, out, textcp)
     root = ET.parse(xml).getroot()
     base = os.path.splitext(xml)[0]
     L = []
@@ -128,12 +175,17 @@ def summarize(vi, keep=None):
             td = td.find('./TypeDesc')
         return td
 
+    def instance_name(obj):
+        """Express VI instances link as qualified name ["Instance", "N"]; their code is in VINS."""
+        q = [s.text or '' for s in obj.iterfind('./LinkSaveQualName/String')]
+        return 'Express VI instance ' + q[1] if len(q) == 2 and q[0] == 'Instance' else None
+
     # Link objects point at heap objects by uid (LinkOffsetList / APILinkCacheList)
     def links(blk):
         out = {}
         for obj in root.iterfind('.//{}/Section/*/*'.format(blk)):
             path = [s.text or '' for s in obj.iterfind('./LinkSavePathRef/String')]
-            name = re.sub(r'&#x[0-9A-Fa-f]+;', '', path[-1]) if path else ''
+            name = instance_name(obj) or (re.sub(r'&#x[0-9A-Fa-f]+;', '', path[-1]) if path else '')
             for o in obj.iterfind('./*/Offset'):
                 out.setdefault(str(int(o.text, 0)), name)
         return out
@@ -231,9 +283,14 @@ def summarize(vi, keep=None):
         def walk(el, depth):
             frames = el.findall('./diagramList/SL__arrayElement')
             labels = case_labels(el, len(frames)) if el.get('class') == 'select' else None
+            active = el.findtext('activeDiag')  # Disable structures: only this frame runs
+            active = int(active, 16) if active and re.fullmatch(r'[0-9A-Fa-f]+', active) else 0
+            # activeDiag is omitted when it is 0 (like SelectDefaultCase); frame 0 then runs
             for i, dl in enumerate(frames):
                 if labels:
                     w('  ' * depth + '- case ' + labels[i])
+                elif el.get('class') == 'commentNode':
+                    w('  ' * depth + '- frame {} ({})'.format(i, 'ACTIVE' if i == active else 'disabled, does not run'))
                 elif len(frames) > 1:
                     w('  ' * depth + '- frame {}'.format(i))
                 walk_diag(dl, depth + 1)
@@ -246,7 +303,7 @@ def summarize(vi, keep=None):
                 td = heap_type(int(re.sub(r'\D', '', cs.findtext('typeDesc'))))
             kind = td.get('Type', '') if td is not None else ''
             enum = [e.text or '' for e in td.iterfind('EnumLabel')] if td is not None else []
-            strs = [bytes.fromhex(s.text or '').decode('latin1') for s in sel.iterfind('./SelectStringArray/SL__arrayElement')]
+            strs = [bytes.fromhex(s.text or '').decode(TEXT_CP, errors='replace') for s in sel.iterfind('./SelectStringArray/SL__arrayElement')]
 
             def val(v):
                 if strs:
@@ -294,6 +351,10 @@ def summarize(vi, keep=None):
                 w('  ' * depth + '- ' + describe(n))
                 if n.find('diagramList') is not None:
                     walk(n, depth + 1)
+                # Flat Sequence: frames are sequenceFrame nodes, each with its own diagramList
+                for i, f in enumerate(n.iterfind('./sequenceList/SL__arrayElement')):
+                    w('  ' * (depth + 1) + '- frame {}'.format(i))
+                    walk(f, depth + 2)
             for s in diag.iterfind('./signalList/SL__arrayElement'):
                 ts = [x.get('uid') for x in s.iterfind('./termList/SL__arrayElement')]
                 if ts:
@@ -310,11 +371,38 @@ def summarize(vi, keep=None):
         for obj in root.iterfind('.//{}/Section/*/*'.format(blk)):
             path = [s.text or '' for s in obj.iterfind('./LinkSavePathRef/String')]
             if path:
-                deps.append('{} {}'.format(obj.tag, re.sub(r'&#x[0-9A-Fa-f]+;', '', '/'.join(path))))
+                deps.append('{} {}'.format(obj.tag, instance_name(obj) or
+                                           re.sub(r'&#x[0-9A-Fa-f]+;', '', '/'.join(path))))
     if deps:
         w('\n## Dependencies (link objects)')
         for d in dict.fromkeys(deps):
             w('- ' + d)
+
+    # Express VI instances (e.g. Vision Assistant): each is a whole VI embedded in a VINS section.
+    # Section 0 = index: u32 count, then one 256-byte Pascal string (instance name) per section 1..n.
+    vins = {int(s.get('Index')): os.path.join(out, s.get('File'))
+            for s in root.iterfind('.//VINS/Section') if s.get('File')}
+    if 0 in vins and os.path.exists(vins[0]):
+        idx = open(vins[0], 'rb').read()
+        count = int.from_bytes(idx[:4], 'big')
+        names = [idx[5 + 256 * i: 5 + 256 * i + idx[4 + 256 * i]].decode('latin1') for i in range(count)]
+        for i, nm in enumerate(names, 1):
+            f = vins.get(i)
+            if not f or not os.path.exists(f) or open(f, 'rb').read(4) != b'RSRC':
+                continue
+            sub = os.path.join(out, 'instance_' + nm)
+            os.makedirs(sub, exist_ok=True)
+            inst_vi = os.path.join(sub, 'instance.vi')
+            with open(f, 'rb') as src, open(inst_vi, 'wb') as dst:
+                dst.write(src.read())
+            try:
+                digest = summarize(inst_vi, sub)
+            except SystemExit as e:
+                digest = '(could not parse: {})'.format(str(e).splitlines()[-1] if str(e) else '?')
+            w('\n## Express VI instance {} (embedded code)'.format(nm))
+            body = digest.split('\n', 1)[1] if '\n' in digest else digest
+            body = body.split('\n(prim(resID N)')[0]  # drop the footer, the outer one covers it
+            w(re.sub(r'(?m)^## ', '### ', body.strip()))
 
     if warn:
         w('\n## Parser notes')
@@ -330,7 +418,10 @@ if __name__ == '__main__':
     keep = None
     if '--keep' in args:
         i = args.index('--keep'); keep = args[i + 1]; del args[i:i + 2]
+    textcp = 'auto'
+    if '--textcp' in args:
+        i = args.index('--textcp'); textcp = args[i + 1]; del args[i:i + 2]
     if len(args) != 1:
         sys.exit(__doc__)
     sys.stdout.reconfigure(encoding='utf-8')
-    print(summarize(args[0], keep))
+    print(summarize(args[0], keep, textcp))

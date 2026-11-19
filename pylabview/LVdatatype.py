@@ -1431,9 +1431,8 @@ class TDObjectTag(TDObject):
 
             for subelem in td_elem:
                 if (subelem.tag == "Ident"):
-                    identStr = subelem.text
-                    if identStr is not None:
-                        self.ident = identStr.encode(self.vi.textEncoding)
+                    # <Ident /> is an empty string (e.g. IMAQ Image tag), not a missing one
+                    self.ident = (subelem.text or '').encode(self.vi.textEncoding)
                 elif (subelem.tag == "LVVariant"):
                     i = int(subelem.get("Index"), 0)
                     obj = LVVariant(i, self.vi, self.blockref, self.po)
